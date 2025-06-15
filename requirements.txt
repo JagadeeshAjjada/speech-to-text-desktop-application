@@ -1,0 +1,23 @@
+# Core Dependencies
+# customtkinter
+# tkinter  # Usually included with Python
+whisper-openai
+torch
+torchaudio
+
+# Audio Processing
+pyaudio
+sounddevice
+numpy
+
+# Input/Output Control
+pynput
+pyperclip
+
+# System Integration
+pystray
+Pillow
+
+# Utilities
+requests
+pathlib2
