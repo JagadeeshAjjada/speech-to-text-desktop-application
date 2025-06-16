@@ -468,7 +468,7 @@ class VoiceTypeProApp:
         self.transcriber = WhisperTranscriber(self.config)
         self.hotkey_manager = HotkeyManager(self.config, self)
         self.text_injector = TextInjector()
-        self.background_popup = BackgroundPopup()
+        self.background_popup = BackgroundPopup(self)
         self.auto_start_manager = AutoStartManager()
         self.background_mode = False
 
@@ -482,6 +482,20 @@ class VoiceTypeProApp:
 
         # Initialize system tray
         self.setup_tray()
+
+    def on_window_show(self, event=None):
+        """Handle main window being shown"""
+        if event and event.widget == self.root:
+            # Hide popup when main window is shown
+            if self.background_mode and self.background_popup.is_visible:
+                self.background_popup.hide_popup()
+
+    def on_window_hide(self, event=None):
+        """Handle main window being hidden"""
+        if event and event.widget == self.root:
+            # Show popup when main window is hidden (only in background mode)
+            if self.background_mode and not self.background_popup.is_visible:
+                self.background_popup.show_popup()
 
     def setup_gui(self):
         """Setup the main GUI window"""
@@ -565,6 +579,11 @@ class VoiceTypeProApp:
         # Handle window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # Handle window events for popup management
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.root.bind("<Map>", self.on_window_show)      # Window shown
+        self.root.bind("<Unmap>", self.on_window_hide)    # Window hidden
+
     def setup_transcription_log(self, parent):
         """Setup the transcription log display"""
         log_frame = ctk.CTkFrame(parent)
@@ -616,6 +635,9 @@ class VoiceTypeProApp:
     def show_window(self, icon=None, item=None):
         """Show the main window"""
         if self.root:
+            self.background_mode = False  # Disable background mode when showing main window
+            if self.background_popup.is_visible:
+                self.background_popup.hide_popup()
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
@@ -628,7 +650,7 @@ class VoiceTypeProApp:
     def on_closing(self):
         """Handle window close event"""
         if self.config.get('ui.minimize_to_tray', True):
-            self.enable_background_mode()  # Enable background mode instead of just hiding
+            self.enable_background_mode()
         else:
             self.quit_application()
 
@@ -737,10 +759,15 @@ class VoiceTypeProApp:
                 ).start()
             else:
                 self.update_status("No audio captured", "orange")
+                # Update popup status too
+                if self.background_mode:
+                    self.background_popup.update_status("No audio", recording=False)
 
         except Exception as e:
             logger.error(f"Error stopping recording: {e}")
             self.update_status("Error processing audio", "red")
+            if self.background_mode:
+                self.background_popup.update_status("Error", recording=False)
 
     def transcribe_and_paste(self, audio_data):
         """Transcribe audio and paste text"""
@@ -756,15 +783,23 @@ class VoiceTypeProApp:
                 self.text_injector.paste_text(text)
 
                 self.update_status("Text pasted successfully", "green")
+                if self.background_mode:
+                    self.background_popup.update_status("Pasted!", recording=False)
             else:
                 self.update_status("No speech detected", "orange")
+                if self.background_mode:
+                    self.background_popup.update_status("No speech", recording=False)
 
         except Exception as e:
             logger.error(f"Error during transcription: {e}")
             self.update_status("Transcription error", "red")
+            if self.background_mode:
+                self.background_popup.update_status("Error", recording=False)
 
         # Reset status after delay
-        threading.Timer(0.01, lambda: self.update_status("Ready")).start()
+        threading.Timer(0.10, lambda: self.update_status("Ready")).start()
+        if self.background_mode:
+            threading.Timer(0.10, lambda: self.background_popup.update_status("Ready", recording=False)).start()
 
     def open_settings(self, icon=None, item=None):
         """Open settings window"""
@@ -802,6 +837,7 @@ class VoiceTypeProApp:
         self.background_popup.hide_popup()
         self.show_window()
         logger.info("Background mode disabled")
+
 
 class SettingsWindow:
     """Settings configuration window"""
@@ -1157,29 +1193,31 @@ class SettingsWindow:
 
 
 class BackgroundPopup:
-    """Sleek background popup with recording animation"""
+    """Sleek background popup with recording animation and controls"""
 
-    def __init__(self):
+    def __init__(self, parent_app):
+        self.parent_app = parent_app
         self.popup = None
         self.is_visible = False
         self.animation_active = False
         self.animation_frame = 0
+        self.drag_data = {"x": 0, "y": 0}
 
     def create_popup(self):
-        """Create the sleek background popup"""
+        """Create the enhanced background popup with controls"""
         if self.popup is None:
             self.popup = ctk.CTkToplevel()
             self.popup.title("")
-            self.popup.geometry("80x25")  # Small 1-inch popup
+            self.popup.geometry("200x60")  # Increased size for buttons
             self.popup.resizable(False, False)
 
             # Remove window decorations and make it stay on top
             self.popup.overrideredirect(True)
             self.popup.attributes('-topmost', True)
-            self.popup.attributes('-alpha', 0.9)
+            self.popup.attributes('-alpha', 0.95)
 
             # Position at top-right corner
-            self.popup.geometry("+{}+20".format(self.popup.winfo_screenwidth() - 100))
+            self.popup.geometry("+{}+20".format(self.popup.winfo_screenwidth() - 220))
 
             # Create main frame with rounded appearance
             self.main_frame = ctk.CTkFrame(
@@ -1191,31 +1229,134 @@ class BackgroundPopup:
             )
             self.main_frame.pack(fill="both", expand=True, padx=2, pady=2)
 
-            # Mic icon and status
-            self.content_frame = ctk.CTkFrame(
+            # Enable dragging
+            self.main_frame.bind("<Button-1>", self.start_drag)
+            self.main_frame.bind("<B1-Motion>", self.on_drag)
+
+            # Top row with mic icon and status
+            self.top_frame = ctk.CTkFrame(
                 self.main_frame,
-                fg_color="transparent"
+                fg_color="transparent",
+                height=30
             )
-            self.content_frame.pack(fill="both", expand=True)
+            self.top_frame.pack(fill="x", padx=5, pady=(5, 2))
+            self.top_frame.pack_propagate(False)
+
+            # Make top frame draggable too
+            self.top_frame.bind("<Button-1>", self.start_drag)
+            self.top_frame.bind("<B1-Motion>", self.on_drag)
 
             self.mic_label = ctk.CTkLabel(
-                self.content_frame,
+                self.top_frame,
                 text="🎤",
                 font=ctk.CTkFont(size=16),
                 text_color="gray"
             )
-            self.mic_label.pack(side="left", padx=5, pady=2)
+            self.mic_label.pack(side="left", pady=2)
+            self.mic_label.bind("<Button-1>", self.start_drag)
+            self.mic_label.bind("<B1-Motion>", self.on_drag)
+
+            self.status_label = ctk.CTkLabel(
+                self.top_frame,
+                text="Ready",
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
+            )
+            self.status_label.pack(side="left", padx=(5, 0), pady=2)
+            self.status_label.bind("<Button-1>", self.start_drag)
+            self.status_label.bind("<B1-Motion>", self.on_drag)
 
             self.status_dot = ctk.CTkLabel(
-                self.content_frame,
+                self.top_frame,
                 text="●",
                 font=ctk.CTkFont(size=12),
                 text_color="gray"
             )
-            self.status_dot.pack(side="right", padx=5, pady=2)
+            self.status_dot.pack(side="right", padx=2, pady=2)
+            self.status_dot.bind("<Button-1>", self.start_drag)
+            self.status_dot.bind("<B1-Motion>", self.on_drag)
+
+            # Bottom row with buttons
+            self.button_frame = ctk.CTkFrame(
+                self.main_frame,
+                fg_color="transparent",
+                height=25
+            )
+            self.button_frame.pack(fill="x", padx=5, pady=(2, 5))
+            self.button_frame.pack_propagate(False)
+
+            # Stop Recording button
+            self.stop_button = ctk.CTkButton(
+                self.button_frame,
+                text="Stop",
+                width=50,
+                height=20,
+                font=ctk.CTkFont(size=10),
+                fg_color=("#cc4444", "#aa3333"),
+                hover_color=("#dd5555", "#bb4444"),
+                command=self.stop_recording,
+                state="disabled"
+            )
+            self.stop_button.pack(side="left", padx=(0, 5))
+
+            # Settings button
+            self.settings_button = ctk.CTkButton(
+                self.button_frame,
+                text="Settings",
+                width=60,
+                height=20,
+                font=ctk.CTkFont(size=10),
+                fg_color=("#444444", "#333333"),
+                hover_color=("#555555", "#444444"),
+                command=self.open_settings
+            )
+            self.settings_button.pack(side="left", padx=(0, 5))
+
+            # Close button
+            # self.close_button = ctk.CTkButton(
+            #     self.button_frame,
+            #     text="×",
+            #     width=20,
+            #     height=20,
+            #     font=ctk.CTkFont(size=12, weight="bold"),
+            #     fg_color=("#666666", "#555555"),
+            #     hover_color=("#777777", "#666666"),
+            #     command=self.hide_popup
+            # )
+            # self.close_button.pack(side="right")
 
             # Hide initially
             self.popup.withdraw()
+
+    def start_drag(self, event):
+        """Start dragging the popup"""
+        self.drag_data["x"] = event.x_root - self.popup.winfo_x()
+        self.drag_data["y"] = event.y_root - self.popup.winfo_y()
+
+    def on_drag(self, event):
+        """Handle popup dragging"""
+        new_x = event.x_root - self.drag_data["x"]
+        new_y = event.y_root - self.drag_data["y"]
+
+        # Keep popup within screen bounds
+        screen_width = self.popup.winfo_screenwidth()
+        screen_height = self.popup.winfo_screenheight()
+        popup_width = self.popup.winfo_width()
+        popup_height = self.popup.winfo_height()
+
+        new_x = max(0, min(new_x, screen_width - popup_width))
+        new_y = max(0, min(new_y, screen_height - popup_height))
+
+        self.popup.geometry(f"+{new_x}+{new_y}")
+
+    def stop_recording(self):
+        """Stop recording through parent app"""
+        if self.parent_app.is_recording:
+            self.parent_app.stop_recording_and_transcribe()
+
+    def open_settings(self):
+        """Open settings and show main window"""
+        self.parent_app.show_window()
 
     def show_popup(self):
         """Show the popup"""
@@ -1233,15 +1374,28 @@ class BackgroundPopup:
         self.is_visible = False
         self.stop_recording_animation()
 
+    def update_status(self, message, recording=False):
+        """Update popup status"""
+        if self.status_label:
+            self.status_label.configure(text=message)
+
+        if self.stop_button:
+            if recording:
+                self.stop_button.configure(state="normal")
+            else:
+                self.stop_button.configure(state="disabled")
+
     def start_recording_animation(self):
         """Start the recording animation"""
         self.animation_active = True
         self.animation_frame = 0
+        self.update_status("Recording...", recording=True)
         self.animate_recording()
 
     def stop_recording_animation(self):
         """Stop the recording animation"""
         self.animation_active = False
+        self.update_status("Ready", recording=False)
         if self.mic_label:
             self.mic_label.configure(text_color="gray")
         if self.status_dot:
