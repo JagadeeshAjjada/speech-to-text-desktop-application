@@ -37,6 +37,10 @@ from PIL import Image, ImageDraw
 import logging
 import sys
 from pathlib import Path
+import winreg
+import subprocess
+import win32gui
+import win32con
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -464,6 +468,9 @@ class VoiceTypeProApp:
         self.transcriber = WhisperTranscriber(self.config)
         self.hotkey_manager = HotkeyManager(self.config, self)
         self.text_injector = TextInjector()
+        self.background_popup = BackgroundPopup()
+        self.auto_start_manager = AutoStartManager()
+        self.background_mode = False
 
         self.is_recording = False
         self.is_toggle_mode = False
@@ -585,9 +592,10 @@ class VoiceTypeProApp:
             draw = ImageDraw.Draw(image)
             draw.ellipse([16, 16, 48, 48], fill='white')
 
-            # Create menu
+            # Create menu with background mode option
             menu = pystray.Menu(
                 item('Show', self.show_window),
+                item('Background Mode', self.toggle_background_mode),
                 item('Settings', self.open_settings),
                 pystray.Menu.SEPARATOR,
                 item('Exit', self.quit_application)
@@ -620,7 +628,7 @@ class VoiceTypeProApp:
     def on_closing(self):
         """Handle window close event"""
         if self.config.get('ui.minimize_to_tray', True):
-            self.hide_window()
+            self.enable_background_mode()  # Enable background mode instead of just hiding
         else:
             self.quit_application()
 
@@ -692,6 +700,10 @@ class VoiceTypeProApp:
             self.update_status("Recording...", "green")
             self.update_recording_indicator(True)
 
+            # Start popup animation if in background mode
+            if self.background_mode:
+                self.background_popup.start_recording_animation()
+
             if self.record_button:
                 self.record_button.configure(text="Stop Recording")
 
@@ -708,6 +720,10 @@ class VoiceTypeProApp:
 
             self.update_status("Processing...", "yellow")
             self.update_recording_indicator(False)
+
+            # Stop popup animation if in background mode
+            if self.background_mode:
+                self.background_popup.stop_recording_animation()
 
             if self.record_button:
                 self.record_button.configure(text="Start Recording")
@@ -765,6 +781,27 @@ class VoiceTypeProApp:
             logger.error(f"Application error: {e}")
         finally:
             self.cleanup()
+
+    def toggle_background_mode(self):
+        """Toggle background mode"""
+        if self.background_mode:
+            self.disable_background_mode()
+        else:
+            self.enable_background_mode()
+
+    def enable_background_mode(self):
+        """Enable background mode with popup"""
+        self.background_mode = True
+        self.hide_window()
+        self.background_popup.show_popup()
+        logger.info("Background mode enabled")
+
+    def disable_background_mode(self):
+        """Disable background mode"""
+        self.background_mode = False
+        self.background_popup.hide_popup()
+        self.show_window()
+        logger.info("Background mode disabled")
 
 class SettingsWindow:
     """Settings configuration window"""
@@ -1025,12 +1062,16 @@ class SettingsWindow:
         if self.config.get('ui.show_notifications', True):
             self.show_notifications.select()
 
-        self.auto_start = ctk.CTkCheckBox(
+        # AUTO-START TOGGLE SWITCH - This is the main addition you requested
+        self.auto_start = ctk.CTkSwitch(
             integration_frame,
-            text="Start with Windows"
+            text="Auto-start when Windows boots",
+            command=self.on_auto_start_toggle
         )
-        self.auto_start.pack(anchor="w", padx=10, pady=2)
-        if self.config.get('ui.auto_start', False):
+        self.auto_start.pack(anchor="w", padx=10, pady=5)
+
+        # Set initial state based on current auto-start status
+        if self.parent_app.auto_start_manager.is_auto_start_enabled():
             self.auto_start.select()
 
     def update_confidence_label(self, value):
@@ -1076,7 +1117,7 @@ class SettingsWindow:
             self.config.set('ui.theme', self.theme_combo.get())
             self.config.set('ui.minimize_to_tray', bool(self.minimize_to_tray.get()))
             self.config.set('ui.show_notifications', bool(self.show_notifications.get()))
-            self.config.set('ui.auto_start', bool(self.auto_start.get()))
+            # self.config.set('ui.auto_start', bool(self.auto_start.get()))
 
             # Apply theme change
             if self.theme_combo.get() != self.config.get('ui.theme'):
@@ -1089,9 +1130,201 @@ class SettingsWindow:
             logger.error(f"Error saving settings: {e}")
             messagebox.showerror("Error", f"Failed to save settings: {e}")
 
+    def on_auto_start_toggle(self):
+        """Handle auto-start toggle switch"""
+        try:
+            if self.auto_start.get():
+                success = self.parent_app.auto_start_manager.enable_auto_start()
+                if not success:
+                    self.auto_start.deselect()
+                    messagebox.showerror("Error", "Failed to enable auto-start")
+            else:
+                success = self.parent_app.auto_start_manager.disable_auto_start()
+                if not success:
+                    self.auto_start.select()
+                    messagebox.showerror("Error", "Failed to disable auto-start")
+
+            # Update config
+            self.config.set('ui.auto_start', bool(self.auto_start.get()))
+
+        except Exception as e:
+            logger.error(f"Error toggling auto-start: {e}")
+            messagebox.showerror("Error", f"Auto-start toggle failed: {e}")
+
     def close_window(self):
         """Close settings window"""
         self.window.destroy()
+
+
+class BackgroundPopup:
+    """Sleek background popup with recording animation"""
+
+    def __init__(self):
+        self.popup = None
+        self.is_visible = False
+        self.animation_active = False
+        self.animation_frame = 0
+
+    def create_popup(self):
+        """Create the sleek background popup"""
+        if self.popup is None:
+            self.popup = ctk.CTkToplevel()
+            self.popup.title("")
+            self.popup.geometry("80x25")  # Small 1-inch popup
+            self.popup.resizable(False, False)
+
+            # Remove window decorations and make it stay on top
+            self.popup.overrideredirect(True)
+            self.popup.attributes('-topmost', True)
+            self.popup.attributes('-alpha', 0.9)
+
+            # Position at top-right corner
+            self.popup.geometry("+{}+20".format(self.popup.winfo_screenwidth() - 100))
+
+            # Create main frame with rounded appearance
+            self.main_frame = ctk.CTkFrame(
+                self.popup,
+                corner_radius=15,
+                fg_color=("#2b2b2b", "#1a1a1a"),
+                border_width=1,
+                border_color=("#404040", "#303030")
+            )
+            self.main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+
+            # Mic icon and status
+            self.content_frame = ctk.CTkFrame(
+                self.main_frame,
+                fg_color="transparent"
+            )
+            self.content_frame.pack(fill="both", expand=True)
+
+            self.mic_label = ctk.CTkLabel(
+                self.content_frame,
+                text="🎤",
+                font=ctk.CTkFont(size=16),
+                text_color="gray"
+            )
+            self.mic_label.pack(side="left", padx=5, pady=2)
+
+            self.status_dot = ctk.CTkLabel(
+                self.content_frame,
+                text="●",
+                font=ctk.CTkFont(size=12),
+                text_color="gray"
+            )
+            self.status_dot.pack(side="right", padx=5, pady=2)
+
+            # Hide initially
+            self.popup.withdraw()
+
+    def show_popup(self):
+        """Show the popup"""
+        if self.popup is None:
+            self.create_popup()
+
+        self.popup.deiconify()
+        self.popup.lift()
+        self.is_visible = True
+
+    def hide_popup(self):
+        """Hide the popup"""
+        if self.popup:
+            self.popup.withdraw()
+        self.is_visible = False
+        self.stop_recording_animation()
+
+    def start_recording_animation(self):
+        """Start the recording animation"""
+        self.animation_active = True
+        self.animation_frame = 0
+        self.animate_recording()
+
+    def stop_recording_animation(self):
+        """Stop the recording animation"""
+        self.animation_active = False
+        if self.mic_label:
+            self.mic_label.configure(text_color="gray")
+        if self.status_dot:
+            self.status_dot.configure(text_color="gray")
+
+    def animate_recording(self):
+        """Animate the recording indicator"""
+        if not self.animation_active or not self.popup:
+            return
+
+        # Pulsing red animation
+        colors = ["#ff4444", "#ff6666", "#ff8888", "#ffaaaa", "#ff8888", "#ff6666"]
+        color = colors[self.animation_frame % len(colors)]
+
+        if self.mic_label:
+            self.mic_label.configure(text_color=color)
+        if self.status_dot:
+            self.status_dot.configure(text_color=color)
+
+        self.animation_frame += 1
+
+        # Schedule next frame
+        if self.popup:
+            self.popup.after(200, self.animate_recording)
+
+
+# This class for auto-start management
+class AutoStartManager:
+    """Manages Windows auto-start functionality"""
+
+    def __init__(self, app_name="VoiceType Pro"):
+        self.app_name = app_name
+        self.registry_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    def is_auto_start_enabled(self):
+        """Check if auto-start is currently enabled"""
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.registry_key) as key:
+                try:
+                    winreg.QueryValueEx(key, self.app_name)
+                    return True
+                except FileNotFoundError:
+                    return False
+        except Exception as e:
+            logger.error(f"Error checking auto-start status: {e}")
+            return False
+
+    def enable_auto_start(self):
+        """Enable auto-start on Windows boot"""
+        try:
+            exe_path = sys.executable
+            if exe_path.endswith("python.exe"):
+                # If running from Python, use the script path
+                script_path = os.path.abspath(__file__)
+                exe_path = f'"{exe_path}" "{script_path}"'
+            else:
+                exe_path = f'"{exe_path}"'
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.registry_key, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, self.app_name, 0, winreg.REG_SZ, exe_path)
+
+            logger.info("Auto-start enabled successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error enabling auto-start: {e}")
+            return False
+
+    def disable_auto_start(self):
+        """Disable auto-start on Windows boot"""
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.registry_key, 0, winreg.KEY_SET_VALUE) as key:
+                try:
+                    winreg.DeleteValue(key, self.app_name)
+                    logger.info("Auto-start disabled successfully")
+                    return True
+                except FileNotFoundError:
+                    # Already disabled
+                    return True
+
+        except Exception as e:
+            logger.error(f"Error disabling auto-start: {e}")
+            return False
 
 
 def main():
