@@ -1,23 +1,3 @@
-"""
-VoiceType Pro - Professional Speech-to-Text Desktop Application
-A robust, user-friendly desktop application that converts speech to text
-and pastes it directly into the current cursor position in any application.
-
-Features:
-- Real-time speech-to-text using OpenAI Whisper (offline)
-- Global hotkeys for activation
-- Automatic text insertion at cursor position
-- Configurable settings interface
-- Multi-language support
-- Press-and-hold or press-to-start/stop modes
-- System tray integration
-- Audio feedback and visual indicators
-
-Requirements:
-pip install tkinter customtkinter pynput pyaudio whisper torch sounddevice numpy threading queue
-"""
-
-import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 import json
@@ -28,7 +8,6 @@ import time
 import pyaudio
 import whisper
 import numpy as np
-import sounddevice as sd
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, Listener as KeyboardListener
 import pystray
@@ -38,16 +17,11 @@ import logging
 import sys
 from pathlib import Path
 import winreg
-import subprocess
-import win32gui
-import win32con
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ConfigManager:
-    """Manages application configuration and settings"""
 
     def __init__(self):
         self.config_file = Path.home() / ".voicetype_pro" / "config.json"
@@ -797,9 +771,9 @@ class VoiceTypeProApp:
                 self.background_popup.update_status("Error", recording=False)
 
         # Reset status after delay
-        threading.Timer(0.10, lambda: self.update_status("Ready")).start()
+        threading.Timer(2.25, lambda: self.update_status("Ready")).start()
         if self.background_mode:
-            threading.Timer(0.10, lambda: self.background_popup.update_status("Ready", recording=False)).start()
+            threading.Timer(2.25, lambda: self.background_popup.update_status("Ready", recording=False)).start()
 
     def open_settings(self, icon=None, item=None):
         """Open settings window"""
@@ -1196,6 +1170,7 @@ class BackgroundPopup:
     """Sleek background popup with recording animation and controls"""
 
     def __init__(self, parent_app):
+        """Sleek background popup with recording animation and controls"""
         self.parent_app = parent_app
         self.popup = None
         self.is_visible = False
@@ -1208,7 +1183,7 @@ class BackgroundPopup:
         if self.popup is None:
             self.popup = ctk.CTkToplevel()
             self.popup.title("")
-            self.popup.geometry("200x60")  # Increased size for buttons
+            self.popup.geometry("160x30")  # Reduced height from 60 to 40
             self.popup.resizable(False, False)
 
             # Remove window decorations and make it stay on top
@@ -1216,8 +1191,8 @@ class BackgroundPopup:
             self.popup.attributes('-topmost', True)
             self.popup.attributes('-alpha', 0.95)
 
-            # Position at top-right corner
-            self.popup.geometry("+{}+20".format(self.popup.winfo_screenwidth() - 220))
+            # Position at bottom middle
+            self.popup.geometry("+{}+738".format(self.popup.winfo_screenwidth() - 765))
 
             # Create main frame with rounded appearance
             self.main_frame = ctk.CTkFrame(
@@ -1233,84 +1208,90 @@ class BackgroundPopup:
             self.main_frame.bind("<Button-1>", self.start_drag)
             self.main_frame.bind("<B1-Motion>", self.on_drag)
 
-            # Top row with mic icon and status
-            self.top_frame = ctk.CTkFrame(
+            # Single row with all elements
+            self.content_frame = ctk.CTkFrame(
                 self.main_frame,
                 fg_color="transparent",
-                height=30
+                height=80
             )
-            self.top_frame.pack(fill="x", padx=5, pady=(5, 2))
-            self.top_frame.pack_propagate(False)
+            self.content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+            self.content_frame.pack_propagate(False)
 
-            # Make top frame draggable too
-            self.top_frame.bind("<Button-1>", self.start_drag)
-            self.top_frame.bind("<B1-Motion>", self.on_drag)
+            # Make content frame draggable too
+            self.content_frame.bind("<Button-1>", self.start_drag)
+            self.content_frame.bind("<B1-Motion>", self.on_drag)
+
+            # Left side: Mic icon and status
+            self.left_frame = ctk.CTkFrame(
+                self.content_frame,
+                fg_color="transparent"
+            )
+            self.left_frame.pack(side="left", fill="y")
 
             self.mic_label = ctk.CTkLabel(
-                self.top_frame,
+                self.left_frame,
                 text="🎤",
-                font=ctk.CTkFont(size=16),
+                font=ctk.CTkFont(size=14),
                 text_color="gray"
             )
-            self.mic_label.pack(side="left", pady=2)
+            self.mic_label.pack(side="left", pady=3)
             self.mic_label.bind("<Button-1>", self.start_drag)
             self.mic_label.bind("<B1-Motion>", self.on_drag)
 
             self.status_label = ctk.CTkLabel(
-                self.top_frame,
+                self.left_frame,
                 text="Ready",
-                font=ctk.CTkFont(size=10),
+                font=ctk.CTkFont(size=9),
                 text_color="gray"
             )
-            self.status_label.pack(side="left", padx=(5, 0), pady=2)
+            self.status_label.pack(side="left", padx=(3, 0), pady=2)
             self.status_label.bind("<Button-1>", self.start_drag)
             self.status_label.bind("<B1-Motion>", self.on_drag)
 
-            self.status_dot = ctk.CTkLabel(
-                self.top_frame,
-                text="●",
-                font=ctk.CTkFont(size=12),
-                text_color="gray"
-            )
-            self.status_dot.pack(side="right", padx=2, pady=2)
-            self.status_dot.bind("<Button-1>", self.start_drag)
-            self.status_dot.bind("<B1-Motion>", self.on_drag)
-
-            # Bottom row with buttons
+            # Right side: Control buttons
             self.button_frame = ctk.CTkFrame(
-                self.main_frame,
-                fg_color="transparent",
-                height=25
+                self.content_frame,
+                fg_color="transparent"
             )
-            self.button_frame.pack(fill="x", padx=5, pady=(2, 5))
-            self.button_frame.pack_propagate(False)
+            self.button_frame.pack(side="right", fill="y")
 
-            # Stop Recording button
+            # Stop Recording button (initially hidden)
             self.stop_button = ctk.CTkButton(
                 self.button_frame,
-                text="Stop",
-                width=50,
+                text="⏹",  # Stop symbol
+                width=10,
                 height=20,
                 font=ctk.CTkFont(size=10),
                 fg_color=("#cc4444", "#aa3333"),
                 hover_color=("#dd5555", "#bb4444"),
-                command=self.stop_recording,
-                state="disabled"
+                command=self.stop_recording
             )
-            self.stop_button.pack(side="left", padx=(0, 5))
+            self.stop_button.pack(side="right", padx=(2, 0))
+            self.stop_button.pack_forget()  # Hide initially
 
             # Settings button
             self.settings_button = ctk.CTkButton(
                 self.button_frame,
-                text="Settings",
-                width=60,
+                text="⚙",  # Settings gear symbol
+                width=10,
                 height=20,
                 font=ctk.CTkFont(size=10),
                 fg_color=("#444444", "#333333"),
                 hover_color=("#555555", "#444444"),
                 command=self.open_settings
             )
-            self.settings_button.pack(side="left", padx=(0, 5))
+            self.settings_button.pack(side="right", padx=(0, 2))
+
+            # Status dot (moved to far right)
+            self.status_dot = ctk.CTkLabel(
+                self.button_frame,
+                text="● ",
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
+            )
+            self.status_dot.pack(side="right", padx=(2, 0), pady=2)
+            self.status_dot.bind("<Button-1>", self.start_drag)
+            self.status_dot.bind("<B1-Motion>", self.on_drag)
 
             # Close button
             # self.close_button = ctk.CTkButton(
@@ -1379,11 +1360,12 @@ class BackgroundPopup:
         if self.status_label:
             self.status_label.configure(text=message)
 
+        # Show/hide stop button based on recording state and toggle mode
         if self.stop_button:
-            if recording:
-                self.stop_button.configure(state="normal")
+            if recording and self.parent_app.is_toggle_mode:
+                self.stop_button.pack(side="right", padx=(2, 0), before=self.settings_button)
             else:
-                self.stop_button.configure(state="disabled")
+                self.stop_button.pack_forget()
 
     def start_recording_animation(self):
         """Start the recording animation"""
