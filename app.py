@@ -1,3 +1,23 @@
+"""
+VoiceType Pro - Professional Speech-to-Text Desktop Application
+A robust, user-friendly desktop application that converts speech to text
+and pastes it directly into the current cursor position in any application.
+
+Features:
+- Real-time speech-to-text using OpenAI Whisper (offline)
+- Global hotkeys for activation
+- Automatic text insertion at cursor position
+- Configurable settings interface
+- Multi-language support
+- Press-and-hold or press-to-start/stop modes
+- System tray integration
+- Audio feedback and visual indicators
+
+Requirements:
+pip install tkinter customtkinter pynput pyaudio whisper torch sounddevice numpy threading queue
+"""
+
+import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 import json
@@ -8,6 +28,7 @@ import time
 import pyaudio
 import whisper
 import numpy as np
+import sounddevice as sd
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, Listener as KeyboardListener
 import pystray
@@ -17,11 +38,16 @@ import logging
 import sys
 from pathlib import Path
 import winreg
+import subprocess
+import win32gui
+import win32con
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ConfigManager:
+    """Manages application configuration and settings"""
 
     def __init__(self):
         self.config_file = Path.home() / ".voicetype_pro" / "config.json"

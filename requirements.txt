@@ -21,3 +21,6 @@ Pillow
 # Utilities
 requests
 pathlib2
+
+pygame
+librosa
