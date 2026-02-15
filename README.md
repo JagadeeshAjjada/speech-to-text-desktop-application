@@ -4,7 +4,6 @@
 VoiceType Pro is a professional desktop application that converts speech to text using OpenAI's Whisper model and automatically pastes the transcribed text at your cursor position in any application.
 
 ## Features
-
 - Real-time Speech-to-Text: Uses OpenAI Whisper (completely offline)
 - Global Hotkeys: Configurable keyboard shortcuts for activations.
 - Universal Text Insertion: Works with any application (Google search, WhatsApp, ChatGPT, Notepad, etc.)
